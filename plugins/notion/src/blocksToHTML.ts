@@ -94,6 +94,24 @@ export function blocksToHtml(blocks: BlockObjectResponse[]) {
             case "code":
                 htmlContent += `<pre><code class="language-${block.code.language.replace(" ", "-")}">${richTextToHTML(block.code.rich_text)}</code></pre>`
                 break
+            case "quote":
+                htmlContent += `<blockquote>${richTextToHTML(block.quote.rich_text)}</blockquote>`
+                break
+            case "video":
+                if (block.video.type === "external") {
+                    const url = block.video.external.url
+                    if (url && (url.includes("youtube.com") || url.includes("youtu.be"))) {
+                        const videoProps = {
+                            url: { type: "string", value: url },
+                            play: { type: "enum", value: "Off" },
+                            shouldMute: { type: "boolean", value: true },
+                        }
+                        htmlContent += `<template data-module-identifier="module:NEd4VmDdsxM3StIUbddO/9rhBPUZttCbLCWqJEL42/YouTube.js:Youtube" data-module-props='${JSON.stringify(
+                            videoProps
+                        )}'></template>`
+                    }
+                }
+                break
             default:
                 // TODO: More block types can be added here!
                 break
