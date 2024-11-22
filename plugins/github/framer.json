@@ -1,0 +1,6 @@
+{
+  "id": "6f4140",
+  "name": "GitHub",
+  "modes": ["configureManagedCollection", "syncManagedCollection"],
+  "icon": "/icon.svg"
+}
