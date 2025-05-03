@@ -1,0 +1,6 @@
+{
+    "id": "fc872a",
+    "name": "Locale Sync",
+    "modes": ["localization"],
+    "icon": "/icon.svg"
+}

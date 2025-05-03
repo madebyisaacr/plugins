@@ -167,7 +167,7 @@ function fetchSheet(spreadsheetId: string, sheetTitle: string, range?: string) {
         query: {
             range: range ?? sheetTitle,
             valueRenderOption: "UNFORMATTED_VALUE",
-            dateTimeRenderOption: "FORMATTED_STRING",
+            dateTimeRenderOption: "SERIAL_NUMBER",
         },
     })
 }
@@ -279,11 +279,35 @@ export interface SyncMutationOptions {
     lastSyncedTime: string | null
 }
 
+const BASE_DATE_1900 = new Date(Date.UTC(1899, 11, 30))
+const BASE_DATE_1904 = new Date(Date.UTC(1904, 0, 1))
+const MS_PER_DAY = 24 * 60 * 60 * 1000 // hours * minutes * seconds * milliseconds
+
+/**
+ * Extracts a date from a serial number in Lotus 1-2-3 date representation.
+ */
+function extractDateFromSerialNumber(serialNumber: number) {
+    // Use 1900 system by default, but if date is before 1904,
+    // switch to 1904 system
+    let baseDate = BASE_DATE_1900
+    const date1900 = new Date(BASE_DATE_1900.getTime() + serialNumber * MS_PER_DAY)
+
+    if (date1900 < BASE_DATE_1904) {
+        baseDate = BASE_DATE_1904
+    }
+
+    const wholeDays = Math.floor(serialNumber)
+    const fractionalDay = serialNumber - wholeDays
+    const milliseconds = Math.round(fractionalDay * MS_PER_DAY)
+
+    return new Date(baseDate.getTime() + wholeDays * MS_PER_DAY + milliseconds)
+}
+
 function getFieldValue(fieldType: CollectionFieldType, cellValue: CellValue) {
     switch (fieldType) {
         case "number": {
             const num = Number(cellValue)
-            if (isNaN(num)) {
+            if (Number.isNaN(num)) {
                 return null
             }
 
@@ -293,8 +317,13 @@ function getFieldValue(fieldType: CollectionFieldType, cellValue: CellValue) {
             return CELL_BOOLEAN_VALUES.includes(cellValue)
         }
         case "date": {
-            if (typeof cellValue !== "string") return null
-            return new Date(cellValue).toUTCString()
+            if (typeof cellValue !== "number") return null
+            try {
+                const date = extractDateFromSerialNumber(cellValue)
+                return date.toISOString()
+            } catch {
+                return null
+            }
         }
         case "enum":
         case "image":

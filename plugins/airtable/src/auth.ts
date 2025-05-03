@@ -95,6 +95,18 @@ class Auth {
         return authorize
     }
 
+    async isWorkerAlive(): Promise<boolean> {
+        try {
+            const res = await fetch(`${this.AUTH_URI}/poll`, {
+                method: "POST",
+            })
+            return res.status === 400
+        } catch (error) {
+            console.error("Failed to connect to OAuth worker:", error)
+            return false
+        }
+    }
+
     private isTokensExpired() {
         const tokens = this.tokens.get()
         if (!tokens) return true
@@ -123,10 +135,14 @@ class Auth {
             const serializedTokens = localStorage.getItem(this.PLUGIN_TOKENS_KEY)
             if (!serializedTokens) return null
 
-            const storedTokens = JSON.parse(serializedTokens) as StoredTokens
-            this.storedTokens = storedTokens
+            try {
+                const storedTokens = JSON.parse(serializedTokens) as StoredTokens
+                this.storedTokens = storedTokens
 
-            return storedTokens
+                return storedTokens
+            } catch {
+                return null
+            }
         },
         clear: () => {
             this.storedTokens = null

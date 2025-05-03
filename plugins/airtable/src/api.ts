@@ -1,5 +1,3 @@
-import { useQuery, useMutation } from "@tanstack/react-query"
-import { SynchronizeResult, SyncMutationOptions, syncTable } from "./airtable"
 import auth from "./auth"
 
 interface AirtableBaseEntity {
@@ -191,7 +189,9 @@ interface CheckboxOption {
 interface FormulaOption {
     formula: string
     referencedFieldIds: string[] | null
-    result: AirtableFieldType | null
+    result: {
+        type: AirtableFieldType
+    } | null
 }
 
 interface RollupOption {
@@ -280,7 +280,7 @@ type AirtableFieldOptions = {
     aiText: AiTextOption
 }
 
-interface AirtableBase extends AirtableBaseEntity {
+export interface AirtableBase extends AirtableBaseEntity {
     permissionLevel?: PermissionLevel
 }
 
@@ -350,24 +350,31 @@ interface BasesResponse {
     offset?: string
 }
 
-interface FetchRecordsParams {
-    baseId: string
-    tableId: string
-}
-
-type QueryParams = Record<string, string | number | string[]> | URLSearchParams
+type QueryParams = Record<string, string | number | string[] | undefined>
 
 interface RequestOptions {
     path: string
     method?: "get" | "post" | "delete" | "patch"
     query?: QueryParams
     body?: Record<string, unknown>
+    signal?: AbortSignal
 }
 
 const API_URL = "https://api.airtable.com/v0"
-const MAX_CMS_ITEMS = 10000
 
-const request = async ({ path, method, query, body }: RequestOptions) => {
+// https://github.com/Airtable/airtable.js/blob/master/src/exponential_backoff_with_jitter.ts
+const INITIAL_RETRY_DELAY = 5000 // 5 seconds, matching Airtable's config
+const MAX_RETRY_DELAY = 600000 // 10 minutes, matching Airtable's config
+const MAX_RETRY_ATTEMPTS = 10
+
+// Exponential backoff with "Full Jitter" algorithm
+const calculateBackoffDelay = (numAttempts: number): number => {
+    const rawBackoffTime = INITIAL_RETRY_DELAY * Math.pow(2, numAttempts)
+    const clippedBackoffTime = Math.min(MAX_RETRY_DELAY, rawBackoffTime)
+    return Math.random() * clippedBackoffTime
+}
+
+const request = async ({ path, method, query, body, signal }: RequestOptions, numAttempts = 0) => {
     const tokens = await auth.getTokens()
 
     if (!tokens) {
@@ -394,13 +401,22 @@ const request = async ({ path, method, query, body }: RequestOptions) => {
         headers: {
             Authorization: `Bearer ${tokens.accessToken}`,
         },
+        signal,
     })
 
     const json = await res.json()
 
+    if (res.status === 429 && numAttempts < MAX_RETRY_ATTEMPTS) {
+        const delay = calculateBackoffDelay(numAttempts)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        return request({ path, method, query, body }, numAttempts + 1)
+    }
+
     if (!res.ok) {
-        const errorMessage = json.error.message
-        throw new Error("Failed to fetch Airtable API: " + errorMessage)
+        const errors = (json.errors as { error: string; message: string }[])?.map(
+            ({ error, message }, index) => `${index + 1}. ${error}: ${message}`
+        )
+        throw new Error(`Failed to fetch Airtable API:\n\n${errors?.join("\n")}`)
     }
 
     return json
@@ -409,16 +425,40 @@ const request = async ({ path, method, query, body }: RequestOptions) => {
 /**
  * Fetch the schema of a chosen base.
  */
-export const fetchBaseSchema = async (baseId: string): Promise<BaseSchemaResponse> => {
+export const fetchTables = async (baseId: string, signal?: AbortSignal): Promise<BaseSchemaResponse> => {
     return request({
         method: "get",
         path: `/meta/bases/${baseId}/tables`,
+        signal,
     })
 }
 
 /**
- * Fetches all bases.
+ * Fetches the schema of a table.
  */
+export const fetchTable = async (baseId: string, tableId: string) => {
+    const bases = await fetchTables(baseId).catch(error => {
+        if (error instanceof Error && error.name === "AbortError") {
+            return null
+        }
+
+        throw error
+    })
+
+    if (!bases) {
+        return null
+    }
+
+    const table = bases.tables.find(table => table.id === tableId)
+
+    if (!table) {
+        throw new Error(`Table with id ${tableId} not found`)
+    }
+
+    return table
+}
+/**
+ * Fetches all bases. */
 export const fetchBases = (offset?: string): Promise<BasesResponse> => {
     const query: QueryParams = {}
     if (offset) {
@@ -434,57 +474,36 @@ export const fetchBases = (offset?: string): Promise<BasesResponse> => {
 /**
  * Fetches all records from a table in a base.
  */
-export const fetchRecords = async (args: FetchRecordsParams): Promise<AirtableRecord[]> => {
-    const { baseId, tableId } = args
+export const fetchRecords = async (baseId: string, tableId: string): Promise<AirtableRecord[]> => {
+    const records: AirtableRecord[] = []
+    let offset: string | undefined
 
-    const data = await request({
-        path: `/${baseId}/${tableId}`,
-        method: "get",
-        query: {
-            returnFieldsByFieldId: "true",
-            maxRecords: MAX_CMS_ITEMS,
-        },
-    })
+    do {
+        const data = await request({
+            path: `/${baseId}/${tableId}`,
+            method: "get",
+            query: {
+                returnFieldsByFieldId: "true",
+                offset,
+            },
+        })
 
-    return data.records
+        records.push(...data.records)
+        offset = data.offset
+    } while (offset !== undefined)
+
+    return records
 }
 
-export const useBasesQuery = () => {
-    return useQuery({
-        queryKey: ["bases"],
-        queryFn: async () => {
-            let allBases: AirtableBase[] = []
-            let currentOffset: string | undefined
+export const fetchAllBases = async () => {
+    let allBases: AirtableBase[] = []
+    let currentOffset: string | undefined
 
-            do {
-                const response = await fetchBases(currentOffset)
-                allBases = [...allBases, ...response.bases]
-                currentOffset = response.offset
-            } while (currentOffset)
+    do {
+        const response = await fetchBases(currentOffset)
+        allBases = [...allBases, ...response.bases]
+        currentOffset = response.offset
+    } while (currentOffset)
 
-            return allBases
-        },
-    })
-}
-
-export const useBaseSchemaQuery = (baseId: string) => {
-    return useQuery({
-        queryKey: ["baseSchema", baseId],
-        queryFn: () => fetchBaseSchema(baseId),
-        enabled: !!baseId,
-    })
-}
-
-export const useSyncTableMutation = ({
-    onSuccess,
-    onError,
-}: {
-    onSuccess?: (result: SynchronizeResult) => void
-    onError?: (e: Error) => void
-}) => {
-    return useMutation({
-        mutationFn: (args: SyncMutationOptions) => syncTable(args),
-        onSuccess,
-        onError,
-    })
+    return allBases
 }

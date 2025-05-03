@@ -87,9 +87,17 @@ export function AuthenticatedApp({ pluginContext, setContext }: AuthenticatedApp
     }, [isUserInfoError, isSelectSheetError, setContext])
 
     useLayoutEffect(() => {
+        const width = sheetTitle !== null ? 360 : 320
+        const height = sheetTitle !== null ? 425 : 345
+
         framer.showUI({
-            width: sheetTitle !== null ? 340 : 320,
-            height: sheetTitle !== null ? 425 : 345,
+            width,
+            height,
+            minWidth: width,
+            minHeight: height,
+            // Only allow resizing when mapping fields as the default size could not be enough.
+            // This will keep the given dimensions in the Select Sheet Screen.
+            resizable: sheetTitle !== null,
         })
     }, [sheetTitle])
 
@@ -167,8 +175,8 @@ export function App({ pluginContext }: AppProps) {
             sheetTitle,
             fields,
             // Determine if the field type is already configured, otherwise default to "string"
-            colFieldTypes: headerRow.map((_, colIndex) => {
-                const field = fields.find(field => Number(field.id) === colIndex)
+            colFieldTypes: headerRow.map(colName => {
+                const field = fields.find(field => field?.name === colName)
                 return field?.type ?? "string"
             }),
         }).then(() => framer.closePlugin())
